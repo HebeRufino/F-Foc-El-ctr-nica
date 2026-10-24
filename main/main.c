@@ -9,6 +9,8 @@
 #include "buttons.h"
 #include "display.h"
 #include "combat.h"
+#include "net.h"
+#include "combat_2p.h"
 
 static const char *TAG = "demo";
 
@@ -17,6 +19,9 @@ static const char *TAG = "demo";
 // Cosas de aps/scaneo
 #define MAX_APS   10
 #define LIST_ROWS 6
+// Cosas de contrincantes/otros jugadores
+static net_peer_t s_peers[NET_MAX_PEERS];
+static int s_np;
 
 static scan_result_t s_aps[MAX_APS];
 static int s_n, s_sel, s_top;
@@ -82,18 +87,34 @@ static void draw_ui(uint32_t pressed, int mic_level, bool audio_ok)
 
 static void draw_list(void)
 {
-    char line[24];
+    char line[24], name[34];
+
+    s_np = net_get_peers(s_peers, NET_MAX_PEERS);
+    const int total = s_np + s_n;
+    if (s_sel >= total) s_sel = total ? total - 1 : 0;
+    if (s_top > s_sel) s_top = s_sel;
+    if (s_sel >= s_top + LIST_ROWS) s_top = s_sel - LIST_ROWS + 1;
+
     display_clear();
-    display_text(0, 0, "WIFI TARGETS", true);
+    display_text(0, 0, "WIFI + PLAYERS", true);
 
     for (int r = 0; r < LIST_ROWS; r++) {
-        int i = s_top + r;
-        if (i >= s_n) break;
-        const char *name = s_aps[i].ssid[0] ? s_aps[i].ssid : "<hidden>";
-        snprintf(line, sizeof(line), "%c%-13.13s %4d",
-         combat_is_defeated(s_aps[i].bssid) ? '*' : ' ', name, s_aps[i].rssi);
-        // const char *name = s_aps[i].ssid[0] ? s_aps[i].ssid : "<hidden>";
-        // snprintf(line, sizeof(line), "%-14.14s %4d", name, s_aps[i].rssi);
+        const int i = s_top + r;
+        if (i >= total) break;
+
+        char mark;
+        int rssi;
+        if (i < s_np) {                              // players first
+            snprintf(name, sizeof(name), "PLAYER %02X:%02X", s_peers[i].mac[4], s_peers[i].mac[5]);
+            mark = '#';
+            rssi = s_peers[i].rssi;
+        } else {
+            const scan_result_t *ap = &s_aps[i - s_np];
+            snprintf(name, sizeof(name), "%s", ap->ssid[0] ? ap->ssid : "<hidden>");
+            mark = combat_is_defeated(ap->bssid) ? '*' : ' ';
+            rssi = ap->rssi;
+        }
+        snprintf(line, sizeof(line), "%c%-13.13s %4d", mark, name, rssi);
         display_text(0, 10 + r * 9, line, i == s_sel);
     }
 }
@@ -106,8 +127,34 @@ static void do_scan(bool display_ok)
         display_flush();
     }
     s_n = scan_run(s_aps, MAX_APS);
+    net_apply_channel();
     s_sel = s_top = 0;
 }
+
+static void draw_invite(net_state_t st)
+{
+    char line[24];
+
+    display_clear();
+    if (st == NET_INVITING) {
+        display_text(0, 20, "INVITING PLAYER...", false);
+        display_text(0, 40, "4:CANCEL", false);
+    } else {                                         // NET_INVITED
+        uint8_t mac[6];
+        net_opponent(mac);
+        snprintf(line, sizeof(line), "PLAYER %02X:%02X", mac[4], mac[5]);
+        display_text(0, 12, "CHALLENGE FROM", false);
+        display_text(0, 24, line, false);
+        display_text(0, 48, "1:ACCEPT 4:DECLINE", false);
+    }
+}
+
+// static void draw_pvp_stub(void)        // replace with the real 2-player combat
+// {
+//     display_clear();
+//     display_text(0, 20, "LINKED! PVP TODO", false);
+//     display_text(0, 40, "4:LEAVE", false);
+// }
 
 static void handle_button(button_id_t id)
 {
@@ -117,12 +164,17 @@ static void handle_button(button_id_t id)
         if (s_sel < s_top) s_top = s_sel;
         break;
     case BTN_DOWN:
-        if (s_sel < s_n - 1) s_sel++;
+        if (s_sel < s_np + s_n - 1) s_sel++;
         if (s_sel >= s_top + LIST_ROWS) s_top = s_sel - LIST_ROWS + 1;
         break;
     case BTN_KEY1:
-        if (s_n > 0 && !combat_is_defeated(s_aps[s_sel].bssid)) {
-            start_combat(s_aps[s_sel].ssid, s_aps[s_sel].rssi, s_aps[s_sel].bssid);
+        if (s_sel < s_np) {
+            net_invite(s_peers[s_sel].mac);
+        } else if (s_sel - s_np < s_n) {
+            const scan_result_t *ap = &s_aps[s_sel - s_np];
+            if (!combat_is_defeated(ap->bssid)) {
+                start_combat(ap->ssid, ap->rssi, ap->bssid);
+            }
         }
         break;
     case BTN_KEY2:                          // rescan
@@ -169,26 +221,37 @@ void app_main(void)
     int log_div = 0;
 
     scan_init();
+    ESP_ERROR_CHECK(net_init());
 
     while (1) {
-        
+        const net_state_t ns = net_state();
+        if (ns == NET_LINKED && !pvp_active()) pvp_start();    // link just came up
+        pvp_update();
+        net_discovery(!combat_active() && !pvp_active() && ns == NET_IDLE);
+
         button_event_t ev;
-        if (xQueueReceive(events, &ev, pdMS_TO_TICKS(UI_PERIOD_MS)) == pdTRUE) {
-            if (ev.pressed) {
-                if (combat_active()) combat_handle_button(ev.id);
-                else                 handle_button(ev.id);
-                if (audio_ok) audio_play_tone(s_button_freq[ev.id], 100);
-            }   
-        }
-        if (display_ok) {
-            if (combat_active()) combat_draw();
-            else                 draw_list();
-            display_flush();
+        if (xQueueReceive(events, &ev, pdMS_TO_TICKS(UI_PERIOD_MS)) == pdTRUE && ev.pressed) {
+            if (pvp_active()) {
+                pvp_handle_button(ev.id);
+            } else if (ns == NET_INVITING) {
+                if (ev.id == BTN_KEY4) net_leave();
+            } else if (ns == NET_INVITED) {
+                if (ev.id == BTN_KEY1) net_accept();
+                else if (ev.id == BTN_KEY4) net_leave();
+            } else if (combat_active()) {
+                combat_handle_button(ev.id);
+            } else {
+                handle_button(ev.id);
+            }
+            if (audio_ok) audio_play_tone(s_button_freq[ev.id], 100);
         }
 
-        // if (audio_ok && ++log_div >= 1000 / UI_PERIOD_MS) {
-        //     log_div = 0;
-        //     ESP_LOGI(TAG, "mic level: %d", mic_level);
-        // }
+        if (display_ok) {
+            if (pvp_active())                            pvp_draw();
+            else if (ns == NET_INVITING || ns == NET_INVITED) draw_invite(ns);
+            else if (combat_active())                    combat_draw();
+            else                                         draw_list();
+            display_flush();
+        }
     }
 }
