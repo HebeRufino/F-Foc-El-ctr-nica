@@ -257,6 +257,7 @@ int scan_run(scan_result_t *out, int max)
         strlcpy(out[i].ssid, (const char *)recs[i].ssid, sizeof(out[i].ssid));
         out[i].rssi = recs[i].rssi;
         ESP_LOGI(TAG, "[%d] '%s' rssi=%d", i, out[i].ssid, out[i].rssi);
+        memcpy(out[i].bssid, recs[i].bssid, 6);
     }
     return n;
 

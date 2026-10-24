@@ -90,7 +90,10 @@ static void draw_list(void)
         int i = s_top + r;
         if (i >= s_n) break;
         const char *name = s_aps[i].ssid[0] ? s_aps[i].ssid : "<hidden>";
-        snprintf(line, sizeof(line), "%-14.14s %4d", name, s_aps[i].rssi);
+        snprintf(line, sizeof(line), "%c%-13.13s %4d",
+         combat_is_defeated(s_aps[i].bssid) ? '*' : ' ', name, s_aps[i].rssi);
+        // const char *name = s_aps[i].ssid[0] ? s_aps[i].ssid : "<hidden>";
+        // snprintf(line, sizeof(line), "%-14.14s %4d", name, s_aps[i].rssi);
         display_text(0, 10 + r * 9, line, i == s_sel);
     }
 }
@@ -117,8 +120,10 @@ static void handle_button(button_id_t id)
         if (s_sel < s_n - 1) s_sel++;
         if (s_sel >= s_top + LIST_ROWS) s_top = s_sel - LIST_ROWS + 1;
         break;
-    case BTN_KEY1:                          // select
-        if (s_n > 0) start_combat(s_aps[s_sel].ssid, s_aps[s_sel].rssi);
+    case BTN_KEY1:
+        if (s_n > 0 && !combat_is_defeated(s_aps[s_sel].bssid)) {
+            start_combat(s_aps[s_sel].ssid, s_aps[s_sel].rssi, s_aps[s_sel].bssid);
+        }
         break;
     case BTN_KEY2:                          // rescan
         do_scan(true);

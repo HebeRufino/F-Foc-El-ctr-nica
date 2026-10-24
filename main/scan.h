@@ -4,6 +4,7 @@
 
 typedef struct {
     char ssid[33];
+    uint8_t bssid[6];
     int8_t rssi;
 } scan_result_t;
 
