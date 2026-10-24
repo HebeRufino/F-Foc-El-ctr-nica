@@ -257,6 +257,14 @@ void display_text(int x, int y, const char *str, bool invert)
     }
 }
 
+void display_enemy(int n)
+{
+    
+    display_draw_rect(44, 4, 40, 32);
+    char t[3] = {'E', (char)('0' + n), 0};
+    display_text(60, 16, t, false);
+}
+
 esp_err_t display_flush(void)
 {
     ESP_RETURN_ON_ERROR(esp_lcd_panel_draw_bitmap(s_panel, 0, 0, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT, s_fb), TAG,

@@ -164,21 +164,20 @@ void app_main(void)
     int log_div = 0;
 
     scan_init();
-    
+
     while (1) {
+        
         button_event_t ev;
         if (xQueueReceive(events, &ev, pdMS_TO_TICKS(UI_PERIOD_MS)) == pdTRUE) {
-            ESP_LOGI(TAG, "button %s %s", buttons_name(ev.id), ev.pressed ? "pressed" : "released");
             if (ev.pressed) {
-                handle_button(ev.id);
-                if (audio_ok){audio_play_tone(s_button_freq[ev.id], 100);}
-            }
+                if (combat_active()) combat_handle_button(ev.id);
+                else                 handle_button(ev.id);
+                if (audio_ok) audio_play_tone(s_button_freq[ev.id], 100);
+            }   
         }
-
-        int mic_level = audio_ok ? audio_mic_level() : 0;
         if (display_ok) {
-            // draw_ui(buttons_read(), mic_level, audio_ok);
-            draw_list();
+            if (combat_active()) combat_draw();
+            else                 draw_list();
             display_flush();
         }
 
