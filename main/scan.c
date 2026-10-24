@@ -18,6 +18,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "regex.h"
+#include "scan.h"
 
 
 #define DEFAULT_SCAN_LIST_SIZE CONFIG_EXAMPLE_SCAN_LIST_SIZE
@@ -216,16 +217,61 @@ static void wifi_scan(void)
     }
 }
 
-void public_scan(){
+esp_err_t scan_init(void)
+{
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK( ret );
+    ESP_ERROR_CHECK(ret);
 
-    wifi_scan();
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    return esp_wifi_start();
 }
+
+int scan_run(scan_result_t *out, int max)
+{
+    esp_err_t err = esp_wifi_scan_start(NULL, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "scan_start failed: %s", esp_err_to_name(err));
+        return 0;
+    }
+
+    wifi_ap_record_t recs[DEFAULT_SCAN_LIST_SIZE];
+    uint16_t n = max < DEFAULT_SCAN_LIST_SIZE ? max : DEFAULT_SCAN_LIST_SIZE;
+    err = esp_wifi_scan_get_ap_records(&n, recs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "get_ap_records failed: %s", esp_err_to_name(err));
+        return 0;
+    }
+
+    ESP_LOGI(TAG, "scan found %u APs", n);
+    for (int i = 0; i < n; i++) {
+        strlcpy(out[i].ssid, (const char *)recs[i].ssid, sizeof(out[i].ssid));
+        out[i].rssi = recs[i].rssi;
+        ESP_LOGI(TAG, "[%d] '%s' rssi=%d", i, out[i].ssid, out[i].rssi);
+    }
+    return n;
+
+}
+
+// void public_scan(){
+//     esp_err_t ret = nvs_flash_init();
+//     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+//         ESP_ERROR_CHECK(nvs_flash_erase());
+//         ret = nvs_flash_init();
+//     }
+//     ESP_ERROR_CHECK( ret );
+
+//     wifi_scan();
+// }
 // void app_main(void)
 // {
 //     // Initialize NVS

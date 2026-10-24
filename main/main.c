@@ -8,10 +8,19 @@
 #include "audio.h"
 #include "buttons.h"
 #include "display.h"
+#include "combat.h"
 
 static const char *TAG = "demo";
 
 #define UI_PERIOD_MS 50
+
+// Cosas de aps/scaneo
+#define MAX_APS   10
+#define LIST_ROWS 6
+
+static scan_result_t s_aps[MAX_APS];
+static int s_n, s_sel, s_top;
+
 
 static const int s_button_freq[BTN_COUNT] = {
     [BTN_UP] = 659,
@@ -69,6 +78,59 @@ static void draw_ui(uint32_t pressed, int mic_level, bool audio_ok)
     }
 }
 
+// Inicio seleccion "enemigo"
+
+static void draw_list(void)
+{
+    char line[24];
+    display_clear();
+    display_text(0, 0, "WIFI TARGETS", true);
+
+    for (int r = 0; r < LIST_ROWS; r++) {
+        int i = s_top + r;
+        if (i >= s_n) break;
+        const char *name = s_aps[i].ssid[0] ? s_aps[i].ssid : "<hidden>";
+        snprintf(line, sizeof(line), "%-14.14s %4d", name, s_aps[i].rssi);
+        display_text(0, 10 + r * 9, line, i == s_sel);
+    }
+}
+
+static void do_scan(bool display_ok)
+{
+    if (display_ok) {                       // the scan blocks for a couple of seconds
+        display_clear();
+        display_text(10, 28, "Scanning...", false);
+        display_flush();
+    }
+    s_n = scan_run(s_aps, MAX_APS);
+    s_sel = s_top = 0;
+}
+
+static void handle_button(button_id_t id)
+{
+    switch (id) {
+    case BTN_UP:
+        if (s_sel > 0) s_sel--;
+        if (s_sel < s_top) s_top = s_sel;
+        break;
+    case BTN_DOWN:
+        if (s_sel < s_n - 1) s_sel++;
+        if (s_sel >= s_top + LIST_ROWS) s_top = s_sel - LIST_ROWS + 1;
+        break;
+    case BTN_KEY1:                          // select
+        if (s_n > 0) start_combat(s_aps[s_sel].ssid, s_aps[s_sel].rssi);
+        break;
+    case BTN_KEY2:                          // rescan
+        do_scan(true);
+        break;
+    default:
+        break;
+    }
+}
+
+// Fin seleccion de "enemigo"
+
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hackathon board demo starting");
@@ -82,10 +144,7 @@ void app_main(void)
 
     if (display_ok) {
         display_clear();
-        display_text(0, 0, "TESTTESTTESTTESTTESTTESTTESTTEST", false);
-        display_text(10, 8, "Hola Queso!", false);
-        display_text(10, 16, "Estoy atrapada!!!!", false);
-        display_text(0, 24, "No puedo escapar de la ESP32", false);
+        display_text(10, 8, "Fo Foca Game", false);
         
         display_flush();
     }
@@ -104,26 +163,28 @@ void app_main(void)
     QueueHandle_t events = buttons_event_queue();
     int log_div = 0;
 
-    public_scan();
-
+    scan_init();
+    
     while (1) {
         button_event_t ev;
         if (xQueueReceive(events, &ev, pdMS_TO_TICKS(UI_PERIOD_MS)) == pdTRUE) {
             ESP_LOGI(TAG, "button %s %s", buttons_name(ev.id), ev.pressed ? "pressed" : "released");
-            if (ev.pressed && audio_ok) {
-                audio_play_tone(s_button_freq[ev.id], 100);
+            if (ev.pressed) {
+                handle_button(ev.id);
+                if (audio_ok){audio_play_tone(s_button_freq[ev.id], 100);}
             }
         }
 
         int mic_level = audio_ok ? audio_mic_level() : 0;
         if (display_ok) {
-            draw_ui(buttons_read(), mic_level, audio_ok);
+            // draw_ui(buttons_read(), mic_level, audio_ok);
+            draw_list();
             display_flush();
         }
 
-        if (audio_ok && ++log_div >= 1000 / UI_PERIOD_MS) {
-            log_div = 0;
-            ESP_LOGI(TAG, "mic level: %d", mic_level);
-        }
+        // if (audio_ok && ++log_div >= 1000 / UI_PERIOD_MS) {
+        //     log_div = 0;
+        //     ESP_LOGI(TAG, "mic level: %d", mic_level);
+        // }
     }
 }
